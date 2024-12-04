@@ -6,7 +6,7 @@ use std::{
     str,
 };
 
-use crate::compression::zlib::ZlibStream;
+use crate::compression::{crc, zlib::ZlibStream};
 
 pub const PNG_HEADER: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 const VALID_CHUNK_TYPES: [&str; 18] = [
@@ -85,7 +85,7 @@ impl Chunk {
             .fold(0usize, |acc, byte| (acc << 8) | *byte as usize);
 
         let type_vec = byte_iterator.by_ref().take(4).cloned().collect::<Vec<_>>();
-        let ctype = match String::from_utf8(type_vec) {
+        let ctype = match String::from_utf8(type_vec.clone()) {
             Ok(str) => {
                 if VALID_CHUNK_TYPES.contains(&str.as_str()) {
                     str
@@ -110,6 +110,14 @@ impl Chunk {
             .by_ref()
             .take(4)
             .fold(0u32, |acc, byte| (acc << 8) | *byte as u32);
+
+        let to_hash = [type_vec, data.clone()].concat();
+
+        if crc != crc::hash(&to_hash) {
+            return Err(DecoderError::InvalidChunk(
+                "chunk CRC could not be verified.",
+            ));
+        }
 
         let size = length + 12;
 

@@ -6,12 +6,13 @@ A no-dependency Rust image manipulation utility (eventually).
     - [ ] Write usage and help blurb.
     - [ ] Expand with feature set.
 - [ ] PNG Decoder
-    - [x]  Read PNG file header.
-    - [x]  Get all chunks.
-    - [ ]  Decompress IDAT.
-        - [x]  Concatenate ZLIB bitstreams from IDAT chunks.
-        - [x]  Parse ZLIB header/adler32.
-        - [ ]  DEFLATE decompression. 
+    - [x] Read PNG file header.
+    - [x] Get all chunks.
+    - [x] Check the CRC on each chunk.
+    - [ ] Decompress IDAT.
+        - [x] Concatenate ZLIB bitstreams from IDAT chunks.
+        - [x] Parse ZLIB header/adler32.
+        - [ ] DEFLATE decompression. 
             - [ ] Block type 0.
             - [ ] Block type 1.
                 - [ ] Prefix code decoding.
@@ -19,6 +20,5 @@ A no-dependency Rust image manipulation utility (eventually).
             - [ ] Block type 2.
                 - [ ] Dynamic prefix code tree generation.
                 - [ ] Same things from block type 1 but slightly different.
-    - [ ] Check the CRC on each chunk.
     - [ ] Filters.
     - [ ] Learn more.
