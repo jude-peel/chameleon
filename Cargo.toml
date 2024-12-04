@@ -1,0 +1,9 @@
+[package]
+name = "chameleon"
+version = "0.1.1"
+authors = ["Jude Peel <judepeel.dev@gmail.com>"]
+repository = "https://github.com/jude-peel/chameleon/"
+readme = "README.md"
+edition = "2021"
+
+[dependencies]
