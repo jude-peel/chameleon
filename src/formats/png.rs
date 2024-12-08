@@ -1,8 +1,7 @@
 use std::{
     error::Error,
     fmt::{self, Display},
-    fs,
-    io::{self, Write},
+    fs, io,
     path::Path,
     str,
 };
@@ -208,7 +207,6 @@ impl Png {
 
         let mut output = Vec::new();
 
-        let mut idx = 0;
         for line in defiltered_scanlines {
             for values in line.chunks(3) {
                 output.push((values[0], values[1], values[2]));

@@ -5,7 +5,7 @@ use chameleon::formats::{png::Png, ppm::PpmSmall};
 #[test]
 fn test_zlib() -> Result<(), Box<dyn Error>> {
     // Create a png.
-    let png = Png::from_path("./tests/samples/minimal_2.png")?;
+    let png = Png::from_path("./tests/samples/small_gradient.png")?;
 
     println!("{:?}", png.data);
 

@@ -1,5 +1,3 @@
-use core::panic::PanicInfo;
-
 pub fn hash(buf: &[u8]) -> u32 {
     let mut crc = !0;
     for &byte in buf.iter() {

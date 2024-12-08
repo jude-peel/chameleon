@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// Code lengths from section 3.2.6 of RFC 1951.
 pub const FIXED_CODE_LENGTHS: [u8; 288] = [

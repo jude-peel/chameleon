@@ -1,25 +1,16 @@
 use std::{fs, io, path::Path};
 pub struct PpmSmall {
     pub header: Vec<u8>,
-    pub dimensions: (u8, u8),
+    pub dimensions: (usize, usize),
     pub data: Vec<(u8, u8, u8)>,
 }
 
 impl PpmSmall {
-    pub fn build(data: &[(u8, u8, u8)], x: u8, y: u8) -> Self {
-        let header = vec![
-            0x50,
-            0x36,
-            0x0a,
-            x + 48,
-            0x20,
-            y + 48,
-            0x0a,
-            0x32,
-            0x35,
-            0x35,
-            0x0a,
-        ];
+    pub fn build(data: &[(u8, u8, u8)], x: usize, y: usize) -> Self {
+        let header = format!("P6\n{} {}\n255\n", x, y)
+            .bytes()
+            .collect::<Vec<u8>>();
+
         Self {
             header,
             dimensions: (x, y),
