@@ -1,21 +1,76 @@
 use std::{
     error::Error,
     fmt::{self, Display},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::Path,
     str,
 };
 
 use crate::compression::{crc, zlib::ZlibStream};
 
+// +-----------+
+// | CONSTANTS |
+// +-----------+
+
 pub const PNG_HEADER: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
 const VALID_CHUNK_TYPES: [&str; 18] = [
     "IHDR", "PLTE", "IDAT", "IEND", "cHRM", "gAMA", "iCCP", "sBIT", "sRGB", "bKGD", "hIST", "tRNS",
     "pHYs", "sPLT", "tIME", "iTXt", "tEXt", "zTXt",
 ];
 
+//      +------------------+
+//      | PNG OPTION ENUMS |
+//      +------------------+
+
+pub enum ColorType {
+    Grayscale,
+    RGB,
+    PalleteIndex,
+    GrayscaleAlpha,
+    RGBA,
+}
+
+pub enum Interlace {
+    None,
+    Adam7,
+}
+
+//      +-------------+
+//      | FILE FORMAT |
+//      +-------------+
+
+/// A structure containing a PNG file.
+///
+/// # Fields
+///
+/// * 'data'
+/// * 'dimensions' -
+/// * 'bit_depth' -
+/// * 'color_type' -
+/// * 'interlace' -
+///
+/// # Examples
+///
+/// '''
+/// // Open the file.
+/// let mut png = Png::from_path("./example.png")?;
+///
+/// // Decode the file into a vector of rgb tuples.
+/// let mut rgb_vec = png.rgb()?;
+///
+/// // Decrease the level of red in the image.
+/// for rgb in rgb_vec.iter_mut() {
+///     *rgb.0.saturating_sub(50);
+/// }
+/// '''
 pub struct Png {
     pub data: PngData,
+    pub dimensions: (usize, usize),
+    pub bit_depth: u8,
+    pub color_type: ColorType,
+    pub interlace: Interlace,
 }
 
 impl Png {
@@ -28,19 +83,65 @@ impl Png {
     /// # Returns
     ///
     /// A result containing either the constructed Png or a DecoderError.
+    ///
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Png, DecoderError> {
         let path = path.as_ref();
 
         let file_bytes = fs::read(path)?;
 
         if file_bytes[0..8] != PNG_HEADER {
-            return Err(DecoderError::TypeError(format!("{:?} is not a PNG.", path)));
+            return Err(DecoderError::NotPngFile);
         }
 
         let data = PngData::build(&file_bytes)?;
 
-        Ok(Png { data })
+        let dimensions = (
+            data.ihdr.data[0..4]
+                .iter()
+                .fold(0usize, |acc, byte| (acc << 8) | *byte as usize),
+            data.ihdr.data[4..8]
+                .iter()
+                .fold(0usize, |acc, byte| (acc << 8) | *byte as usize),
+        );
+
+        let bit_depth = data.ihdr.data[8];
+
+        let color_type = match data.ihdr.data[9] {
+            0 => ColorType::Grayscale,
+            2 => ColorType::RGB,
+            3 => ColorType::PalleteIndex,
+            4 => ColorType::GrayscaleAlpha,
+            6 => ColorType::RGBA,
+            other => {
+                return Err(DecoderError::InvalidColorType(other));
+            }
+        };
+
+        let interlace = match data.ihdr.data[12] {
+            0 => Interlace::None,
+            1 => Interlace::Adam7,
+            other => {
+                return Err(DecoderError::InvalidInterlace(other));
+            }
+        };
+
+        //let interlace = matches!()
+
+        Ok(Png {
+            data,
+            dimensions,
+            bit_depth,
+            color_type,
+            interlace,
+        })
     }
+    /// Converts the PNG file into a vector of rgb tuples.
+    ///
+    /// # Returns
+    ///
+    /// A Vec<(u8, u8, u8)> containing each pixel from left to right, top to
+    /// bottom. Remember to store the dimensions for future encoding.
+    ///
     pub fn rgb(&self) -> Vec<(u8, u8, u8)> {
         // Concatenate the data from all IDAT chunks.
         let zlib_bytes = self
@@ -51,19 +152,93 @@ impl Png {
             .cloned()
             .collect::<Vec<_>>();
 
-        let zlib = ZlibStream::build(&zlib_bytes).unwrap();
+        let mut zlib = ZlibStream::build(&zlib_bytes).unwrap();
 
-        todo!()
+        let data = zlib.decompress().unwrap();
+
+        // Get the number of samples per pixel.
+        let samples = match self.color_type {
+            ColorType::Grayscale => 1,
+            ColorType::RGB => 3,
+            ColorType::PalleteIndex => 1,
+            ColorType::GrayscaleAlpha => 2,
+            ColorType::RGBA => 4,
+        };
+
+        // Split the data into each individual scanline.
+        let scanlines = data
+            .chunks((samples * self.dimensions.0) + 1)
+            .collect::<Vec<_>>();
+
+        println!("{:?}", scanlines);
+
+        let mut last = vec![0u8; samples * self.dimensions.0];
+
+        let mut defiltered_scanlines: Vec<Vec<u8>> = Vec::with_capacity(scanlines.len());
+
+        for scanline in scanlines {
+            let mut left = vec![0u8; samples];
+            match scanline[0] {
+                0 => defiltered_scanlines.push(scanline[1..].to_vec()),
+                1 => {
+                    let mut buf = Vec::with_capacity(self.dimensions.0);
+
+                    for pixel in scanline[1..].chunks(samples) {
+                        for (j, sample) in pixel.iter().enumerate() {
+                            buf.push(sample.wrapping_add(left[j]));
+                        }
+                        left = pixel.to_vec();
+                    }
+
+                    defiltered_scanlines.push(buf);
+                }
+                2 => {
+                    let mut buf = Vec::with_capacity(self.dimensions.0);
+
+                    for (i, pixel) in scanline.iter().skip(1).enumerate() {
+                        buf.push(pixel.wrapping_add(last[i]));
+                    }
+
+                    defiltered_scanlines.push(buf);
+                }
+                _ => {}
+            }
+            last = defiltered_scanlines.last().unwrap().clone();
+        }
+
+        let mut output = Vec::new();
+
+        let mut idx = 0;
+        for line in defiltered_scanlines {
+            for values in line.chunks(3) {
+                output.push((values[0], values[1], values[2]));
+            }
+        }
+
+        output
     }
 }
 
-#[derive(Clone)]
+/// A structure for representing each individual chunk in the PNG file mostly for
+/// internal use. These chunks have a header containing the length of the data
+/// in the chunk as a u32, a 4 byte type, the actual data of the chunk, then
+/// a CRC32 checksum.
+///
+/// # Fields
+///
+/// * 'length' - The length of the data in the chunk.
+/// * 'ctype' - The type of the chunk.
+/// * 'data' - The data held within the chunk.
+/// * 'crc' - The CRC32 checksum.
+/// * 'size' - The overall size of the chunk (including the header and checksum).
+///
+#[derive(Clone, Debug)]
 pub struct Chunk {
-    length: usize,
-    ctype: String,
-    data: Vec<u8>,
-    crc: u32,
-    size: usize,
+    pub length: usize,
+    pub ctype: String,
+    pub data: Vec<u8>,
+    pub crc: u32,
+    pub size: usize,
 }
 
 impl Chunk {
@@ -145,6 +320,8 @@ impl Default for Chunk {
 /// * 'ihdr' - An array storing the 13 byte IHDR chunk.
 /// * 'plte' - Contains the optional PLTE chunk.
 /// * 'IDAT' - Contains a vector of Vec<u8>'s containing the IDAT chunk/chunks.
+///
+#[derive(Debug)]
 pub struct PngData {
     pub raw_data: Vec<u8>,
     pub ihdr: Chunk,
@@ -154,6 +331,12 @@ pub struct PngData {
 }
 
 impl PngData {
+    /// Parses the raw bytes of a PNG file and organizes it into chunks.
+    ///
+    /// # Arguments
+    ///
+    /// * 'raw_data' - A slice containing the entire PNG file as bytes.
+    ///
     pub fn build(raw_data: &[u8]) -> Result<Self, DecoderError> {
         if raw_data[0..8] != PNG_HEADER {
             return Err(DecoderError::NotPngFile);
@@ -186,13 +369,69 @@ impl PngData {
     }
 }
 
+//      +---------+
+//      | FILTERS |
+//      +---------+
+
+/// Enum for storing each filter type described in Chapter 6 of the spec.
+/// Each filter is defined by a single byte before each scanline, and
+/// applies to each byte, regardless of bit depth. Most pixels have more
+/// than one bytes worth of information, and so in these cases, the filter
+/// is applied referencing the corrosponding byte of the previous pixel.
+/// So, if the color type is RGB with a bit-depth of 8, each sample for
+/// red would be filtered together, and then each sample for blue, and so
+/// on.
+///
+/// # Members
+///
+/// * 'None' - No filter is applied.
+/// * 'Sub' - Each byte transmits the difference between itself and the last
+///         corrosponding byte.
+/// * 'Up' - Each byte is the same as sub however it transmits the difference
+///         between the current byte and the corrosponding byte from the pixel
+///         directly above it (same position in the previous scanline).
+/// * 'Average' - Subtracts the average of the bytes in the pixels to the left
+///         and above from the current byte.
+/// * 'Paeth' - A bit too complex to be worth summarizing, it's described in
+///         section 6.6 of the specification.
+///         
+pub enum Filters {
+    None,
+    Sub,
+    Up,
+    Average,
+    Paeth,
+}
+
+//      +----------------+
+//      | ERROR CHECKING |
+//      +----------------+
+
+/// Custom error types for decoder related errors.
+///
+/// # Members
+///
+/// * 'NotPngFile' - Pretty self-explainatory, used when the file given is not
+///         a valid PNG file. Called when the input file either lacks the .png
+///         extension, or does not have the PNG header.
+/// * 'IoError' - A wrapper for the std::io::Error type to be called when the
+///         decoder tries something that causes an io::Error.
+/// * 'InvalidChunk' - Called when the chunk being parsed is not valid, either
+///         because the header is incorrect, or the CRC32 deos not match the
+///         data. Holds a &str for communicating why the chunk is invalid.
+/// * 'InvalidColorType' - Used if the byte for color type in IHDR is not set
+///         to either of the valid types: 1, 2, 3, 4, or 6. Holds the invalid
+///         color type byte.
+/// * 'InvalidInterlace' - Used if the byte for the interlace is invalid (not
+///         0 or 1). Holds the invalid interlace byte.
+///         
 #[derive(Debug)]
 pub enum DecoderError {
     NotPngFile,
-    TypeError(String),
     IoError(io::Error),
-    NoMoreChunks(usize),
     InvalidChunk(&'static str),
+    InvalidColorType(u8),
+    InvalidInterlace(u8),
 }
 
 // Defines how DecoderErrors are displayed.
@@ -202,20 +441,21 @@ impl Display for DecoderError {
             DecoderError::NotPngFile => {
                 write!(f, "Error: File is not a valid PNG file.")
             }
-            DecoderError::TypeError(e) => {
-                write!(
-                    f,
-                    "Error: Attempted to decode incompatible type as png, '{e}'."
-                )
-            }
             DecoderError::IoError(e) => {
-                write!(f, "Error: decoder cause an io::Error, '{e}'")
-            }
-            DecoderError::NoMoreChunks(v) => {
-                write!(f, "Error: No more chunks left to iterate over, reached end of file at index '{v}'")
+                write!(f, "Error: The decoder caused an io::Error, '{e}'")
             }
             DecoderError::InvalidChunk(s) => {
                 write!(f, "Error: Invalid chunk, {}", s)
+            }
+            DecoderError::InvalidColorType(t) => {
+                write!(
+                    f,
+                    "Error: Invalid color type {}, see PNG Specification 4.1.1 for valid types.",
+                    t
+                )
+            }
+            DecoderError::InvalidInterlace(i) => {
+                write!(f, "Error: Invalid interlace value {}, only 0 (none) or 1 (Adam7 interlace) are currently valid.", i)
             }
         }
     }

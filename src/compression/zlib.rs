@@ -1,6 +1,9 @@
 use std::{error::Error, fmt::Display};
 
-use super::{bits::BitVector64, inflate::DeflateStream};
+use super::{
+    bits::BitVector64,
+    inflate::{DeflateError, DeflateStream},
+};
 
 #[derive(Debug)]
 pub enum ZlibError {
@@ -105,5 +108,9 @@ impl ZlibStream {
             deflate,
             adler32,
         })
+    }
+    #[inline]
+    pub fn decompress(&mut self) -> Result<Vec<u8>, DeflateError> {
+        self.deflate.decompress()
     }
 }

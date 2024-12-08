@@ -27,7 +27,7 @@ impl Error for BitVecError {}
 /// * 'len' - A usize value containing the length of the bit vector.
 /// * 'idx' - A usize value representing the current index in the buffer.
 ///         len % 64 the index within the current u64.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BitVector64 {
     pub buffer: Vec<u64>,
     pub len: usize,
@@ -203,8 +203,9 @@ impl Iterator for BitVector64 {
 }
 impl Display for BitVector64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for unsigned64 in self.buffer.clone() {
-            writeln!(f, "{:064b}", unsigned64)?;
+        let iter = self.clone();
+        for bit in iter {
+            write!(f, "{}", bit)?;
         }
         Ok(())
     }
