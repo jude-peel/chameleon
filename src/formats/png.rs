@@ -156,7 +156,7 @@ impl Png {
         let data = zlib.decompress().unwrap();
 
         // Get the number of samples per pixel.
-        let samples = match self.color_type {
+        let samples: usize = match self.color_type {
             ColorType::Grayscale => 1,
             ColorType::RGB => 3,
             ColorType::PalleteIndex => 1,
@@ -164,41 +164,33 @@ impl Png {
             ColorType::RGBA => 4,
         };
 
+        let bpp = samples as u8 * (self.bit_depth / 8);
+        println!("bpp: {}, bit_depth: {}", bpp, self.bit_depth);
+
         // Split the data into each individual scanline.
         let scanlines = data
             .chunks((samples * self.dimensions.0) + 1)
             .collect::<Vec<_>>();
-
-        println!("{:?}", scanlines);
 
         let mut last = vec![0u8; samples * self.dimensions.0];
 
         let mut defiltered_scanlines: Vec<Vec<u8>> = Vec::with_capacity(scanlines.len());
 
         for scanline in scanlines {
-            let mut left = vec![0u8; samples];
+            println!("{}", scanline[0]);
             match scanline[0] {
                 0 => defiltered_scanlines.push(scanline[1..].to_vec()),
                 1 => {
-                    let mut buf = Vec::with_capacity(self.dimensions.0);
-
-                    for pixel in scanline[1..].chunks(samples) {
-                        for (j, sample) in pixel.iter().enumerate() {
-                            buf.push(sample.wrapping_add(left[j]));
-                        }
-                        left = pixel.to_vec();
-                    }
-
-                    defiltered_scanlines.push(buf);
+                    defiltered_scanlines.push(rfsub(&scanline[1..], bpp as usize));
                 }
                 2 => {
-                    let mut buf = Vec::with_capacity(self.dimensions.0);
-
-                    for (i, pixel) in scanline.iter().skip(1).enumerate() {
-                        buf.push(pixel.wrapping_add(last[i]));
-                    }
-
-                    defiltered_scanlines.push(buf);
+                    defiltered_scanlines.push(rfup(&scanline[1..], &last));
+                }
+                3 => {
+                    defiltered_scanlines.push(rfaverage(&scanline[1..], &last, bpp as usize));
+                }
+                4 => {
+                    defiltered_scanlines.push(rfpaeth(&scanline[1..], &last, bpp as usize));
                 }
                 _ => {}
             }
@@ -399,6 +391,67 @@ pub enum Filters {
     Up,
     Average,
     Paeth,
+}
+
+pub fn rfsub(scanline: &[u8], bpp: usize) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(scanline.len());
+    for (i, &byte) in scanline.iter().enumerate() {
+        let left = if i >= bpp { buf[i - bpp] } else { 0 };
+
+        buf.push(byte.wrapping_add(left));
+    }
+
+    buf
+}
+
+pub fn rfup(scanline: &[u8], last: &[u8]) -> Vec<u8> {
+    scanline
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte.wrapping_add(last[i]))
+        .collect()
+}
+
+pub fn rfaverage(scanline: &[u8], last: &[u8], bpp: usize) -> Vec<u8> {
+    scanline
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| {
+            let left = if i >= bpp { scanline[i - bpp] } else { 0 };
+            let above = last[i];
+            byte.wrapping_add((left + above) / 2)
+        })
+        .collect()
+}
+
+pub fn rfpaeth(scanline: &[u8], last: &[u8], bpp: usize) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(scanline.len());
+
+    for (i, &byte) in scanline.iter().enumerate() {
+        let left = if i >= bpp { buf[i - bpp] } else { 0 };
+        let above = last[i];
+        let upper_left = if i >= bpp { last[i - bpp] } else { 0 };
+
+        buf.push(byte.wrapping_add(fpaeth(left, above, upper_left)));
+    }
+    println!("{:?}", buf);
+    buf
+}
+
+pub fn fpaeth(left: u8, above: u8, upper_left: u8) -> u8 {
+    let (a, b, c) = (left as i16, above as i16, upper_left as i16);
+    let p = (a + b) - c;
+    let pa = p.abs_diff(a);
+    let pb = p.abs_diff(b);
+    let pc = p.abs_diff(c);
+
+    if pa <= pb && pa <= pc {
+        left
+    } else if pb <= pc {
+        above
+    } else {
+        upper_left
+    }
 }
 
 //      +----------------+

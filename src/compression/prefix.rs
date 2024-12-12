@@ -236,17 +236,3 @@ impl PrefixCodeMap {
         Self { map }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PrefixCodeMap, FIXED_CODE_LENGTHS};
-
-    #[test]
-    fn test_code_map() {
-        let map = PrefixCodeMap::from_lengths(&FIXED_CODE_LENGTHS);
-
-        for kv in map.map {
-            println!("{} {}", kv.0, kv.1);
-        }
-    }
-}

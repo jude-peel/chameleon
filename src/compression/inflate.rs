@@ -54,7 +54,6 @@ impl DeflateStream {
         }
     }
     pub fn decompress(&mut self) -> Result<Vec<u8>, DeflateError> {
-        println!("{}", self.bitstream);
         while !self.finished {
             let header = self.bitstream.by_ref().take(3).collect::<Vec<_>>();
 
@@ -318,8 +317,9 @@ impl DeflateStream {
                     }
 
                     let mut _distance = 0usize;
+
+                    let mut dist_buf = Code::new();
                     loop {
-                        let mut dist_buf = Code::new();
                         if let Some(bit) = self.bitstream.by_ref().next() {
                             dist_buf.push_bit(bit);
                             if let Some(dist) = dist.map.get(&dist_buf) {
@@ -328,7 +328,6 @@ impl DeflateStream {
                             }
                         }
                     }
-
                     let dist_extra = DISTANCE_EXTRA_BITS[_distance];
                     let dist_base = DISTANCE_BASE[_distance];
 

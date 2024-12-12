@@ -20,10 +20,10 @@ A no-dependency Rust image manipulation utility (eventually).
             - [x] Block type 2.
                 - [x] Dynamic prefix code tree generation.
                 - [x] Same things from block type 1 but slightly different.
-    - [ ] Filters.
+    - [x] Filters.
       - [x] None.
       - [x] Sub.
       - [x] Up.
-      - [ ] Average.
-      - [ ] Paeth.
+      - [x] Average.
+      - [x] Paeth.
     - [ ] Learn more.

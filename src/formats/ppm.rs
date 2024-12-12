@@ -1,11 +1,11 @@
 use std::{fs, io, path::Path};
-pub struct PpmSmall {
+pub struct Ppm {
     pub header: Vec<u8>,
     pub dimensions: (usize, usize),
     pub data: Vec<(u8, u8, u8)>,
 }
 
-impl PpmSmall {
+impl Ppm {
     pub fn build(data: &[(u8, u8, u8)], x: usize, y: usize) -> Self {
         let header = format!("P6\n{} {}\n255\n", x, y)
             .bytes()
