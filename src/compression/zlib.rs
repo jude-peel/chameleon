@@ -96,6 +96,8 @@ impl ZlibStream {
 
         let deflate = DeflateStream::build(&bytes[header.end_idx..bytes.len() - 4]);
 
+        //println!("{}", deflate.bitstream);
+
         let adler32 = u32::from_be_bytes([
             bytes[bytes.len() - 4],
             bytes[bytes.len() - 3],

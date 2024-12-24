@@ -31,6 +31,7 @@ pub enum ColorType {
     RGBA,
 }
 
+#[derive(Debug)]
 pub enum Interlace {
     None,
     Adam7,
@@ -142,6 +143,7 @@ impl Png {
     /// bottom. Remember to store the dimensions for future encoding.
     ///
     pub fn rgb(&self) -> Vec<(u8, u8, u8)> {
+        println!("{:?}", self.data.ancillary_chunks);
         // Concatenate the data from all IDAT chunks.
         let zlib_bytes = self
             .data
@@ -175,26 +177,32 @@ impl Png {
         let mut last = vec![0u8; samples * self.dimensions.0];
 
         let mut defiltered_scanlines: Vec<Vec<u8>> = Vec::with_capacity(scanlines.len());
-
+        println!("{:?}", self.interlace);
         for scanline in scanlines {
-            println!("{}", scanline[0]);
             match scanline[0] {
-                0 => defiltered_scanlines.push(scanline[1..].to_vec()),
+                0 => {
+                    print!("None ");
+                    defiltered_scanlines.push(scanline[1..].to_vec());
+                }
                 1 => {
+                    print!("Sub ");
                     defiltered_scanlines.push(rfsub(&scanline[1..], bpp as usize));
                 }
                 2 => {
+                    print!("Up ");
                     defiltered_scanlines.push(rfup(&scanline[1..], &last));
                 }
                 3 => {
+                    print!("Average ");
                     defiltered_scanlines.push(rfaverage(&scanline[1..], &last, bpp as usize));
                 }
                 4 => {
+                    print!("Paeth ");
                     defiltered_scanlines.push(rfpaeth(&scanline[1..], &last, bpp as usize));
                 }
                 _ => {}
             }
-            last = defiltered_scanlines.last().unwrap().clone();
+            last = defiltered_scanlines.last().unwrap_or(&Vec::new()).clone();
         }
 
         let mut output = Vec::new();
@@ -397,10 +405,8 @@ pub fn rfsub(scanline: &[u8], bpp: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(scanline.len());
     for (i, &byte) in scanline.iter().enumerate() {
         let left = if i >= bpp { buf[i - bpp] } else { 0 };
-
         buf.push(byte.wrapping_add(left));
     }
-
     buf
 }
 
@@ -413,17 +419,15 @@ pub fn rfup(scanline: &[u8], last: &[u8]) -> Vec<u8> {
 }
 
 pub fn rfaverage(scanline: &[u8], last: &[u8], bpp: usize) -> Vec<u8> {
-    scanline
-        .iter()
-        .enumerate()
-        .map(|(i, &byte)| {
-            let left = if i >= bpp { scanline[i - bpp] } else { 0 };
-            let above = last[i];
-            byte.wrapping_add((left + above) / 2)
-        })
-        .collect()
+    let mut buf = Vec::with_capacity(scanline.len());
+    for (i, &byte) in scanline.iter().enumerate() {
+        let left = if i >= bpp { buf[i - bpp] } else { 0 };
+        let above = if !last.is_empty() { last[i] } else { 0 };
+        let original = byte.wrapping_add(((left as u16 + above as u16) / 2) as u8);
+        buf.push(original);
+    }
+    buf
 }
-
 pub fn rfpaeth(scanline: &[u8], last: &[u8], bpp: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(scanline.len());
 
@@ -431,20 +435,18 @@ pub fn rfpaeth(scanline: &[u8], last: &[u8], bpp: usize) -> Vec<u8> {
         let left = if i >= bpp { buf[i - bpp] } else { 0 };
         let above = last[i];
         let upper_left = if i >= bpp { last[i - bpp] } else { 0 };
-
         buf.push(byte.wrapping_add(fpaeth(left, above, upper_left)));
     }
-    println!("{:?}", buf);
+
     buf
 }
 
 pub fn fpaeth(left: u8, above: u8, upper_left: u8) -> u8 {
     let (a, b, c) = (left as i16, above as i16, upper_left as i16);
-    let p = (a + b) - c;
+    let p = a + b - c;
     let pa = p.abs_diff(a);
     let pb = p.abs_diff(b);
     let pc = p.abs_diff(c);
-
     if pa <= pb && pa <= pc {
         left
     } else if pb <= pc {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{cell::RefCell, cmp::Ordering, fmt, fmt::Display, rc::Rc};
 
 /// Code lengths from section 3.2.6 of RFC 1951.
 pub const FIXED_CODE_LENGTHS: [u8; 288] = [
@@ -70,9 +70,9 @@ pub const DISTANCE_BASE: [u16; 30] = [
 /// // 0b0000_0000_0000_0000_0000_0000_0000_1011
 /// assert_eq!(new.code, from.code);
 /// '''
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct Code {
-    pub buffer: u16,
+    pub buffer: u32,
     pub length: u8,
     index: u8,
 }
@@ -101,7 +101,7 @@ impl Code {
     /// # Returns
     ///
     /// A Code struct with the given values.
-    pub fn from(buffer: u16, length: u8) -> Self {
+    pub fn from(buffer: u32, length: u8) -> Self {
         Self {
             buffer,
             length,
@@ -116,7 +116,7 @@ impl Code {
     ///
     /// * 'buffer' - A u32 acting as a bit buffer containing the bits to push.
     /// * 'length' - The number of bits to push.
-    pub fn push(&mut self, buffer: u16, length: u8) {
+    pub fn push(&mut self, buffer: u32, length: u8) {
         self.buffer = (self.buffer << length) | buffer;
         self.length += length;
     }
@@ -127,7 +127,7 @@ impl Code {
     ///
     /// * 'bit' - A u8 representing the bit to push.
     pub fn push_bit(&mut self, bit: u8) {
-        let normalized_bit: u16 = match bit {
+        let normalized_bit: u32 = match bit {
             0 => 0,
             1 => 1,
             _ => {
@@ -159,7 +159,7 @@ impl Iterator for Code {
     }
 }
 
-impl std::fmt::Display for Code {
+impl Display for Code {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -170,45 +170,204 @@ impl std::fmt::Display for Code {
     }
 }
 
-impl PartialEq for Code {
+/// Struct representing each node of a binary tree.
+///
+/// # Fields
+///
+/// * 'value' - An option containing a usize or None, None represents that
+///         the node is a branch rather than a leaf, if a value is present,
+///         the node should be on the edge of the tree.
+/// * 'significance' - A u64 value used to sort the nodes on the tree. If
+///         implementing a frequency based Huffman tree, significance can
+///         be used to represent the frequency of each node. If, used to
+///         generate prefix codes, significance represents the code.
+/// * 'code' - An instance of the Code struct which contains a u32 bit buffer
+///         containing the code, and a length representing what quantity of bits
+///         in the buffer are part of the code.
+/// * 'left' - An option holding a Rc<RefCell<>> reference to the child node attached to
+///         the left.
+/// * 'right' - An option holding a Rc<RefCell<>> reference to the child node attached to
+///         the right.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub value: Option<usize>,
+    pub significance: u64,
+    pub code: Code,
+    pub left: Option<Rc<RefCell<Node>>>,
+    pub right: Option<Rc<RefCell<Node>>>,
+}
+
+impl Node {
+    /// Creates a new empty Node.
+    ///
+    /// # Returns
+    ///
+    /// A node with default values.
+    pub fn new() -> Self {
+        Self {
+            value: None,
+            significance: 0,
+            code: Code::new(),
+            left: None,
+            right: None,
+        }
+    }
+}
+
+impl Display for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({:?}, {})", self.value, self.code)
+    }
+}
+
+impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
-        self.buffer.eq(&other.buffer) && self.length.eq(&other.length)
+        self.significance.eq(&other.significance)
     }
 }
 
-impl Eq for Code {}
+impl Eq for Node {}
 
-impl Ord for Code {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.buffer
-            .cmp(&other.buffer)
-            .then_with(|| self.length.cmp(&other.length))
+impl Ord for Node {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.significance
+            .cmp(&other.significance)
+            .then_with(|| self.code.length.cmp(&other.code.length))
     }
 }
 
-impl PartialOrd for Code {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+impl PartialOrd for Node {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-pub struct PrefixCodeMap {
-    pub map: BTreeMap<Code, usize>,
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl PrefixCodeMap {
-    pub fn from_lengths(code_lengths: &[u8]) -> Self {
-        let mut occurances = [0u16; 256];
-        let max_length = *code_lengths.iter().max().unwrap() as usize;
+/// A binary tree containing prefix codes.
+///
+/// # Fields
+///
+/// * 'root' - The root node to which all others are connected.
+/// * 'leaves' - A vector containing all the leaf nodes/nodes with values.
+/// * 'current' - The most recent node to be traversed.
+#[derive(Debug)]
+pub struct PrefixTree {
+    pub root: Rc<RefCell<Node>>,
+    pub current: Rc<RefCell<Node>>,
+}
 
+impl PrefixTree {
+    /// Creates a new empty PrefixTree.
+    ///
+    /// # Returns
+    ///
+    /// A PrefixTree with default values.
+    pub fn new() -> Self {
+        Self {
+            root: Rc::new(RefCell::new(Node::new())),
+            current: Rc::new(RefCell::new(Node::new())),
+        }
+    }
+    /// Accepts a code as input and then creates the branches required to reach
+    /// the new node, and then populates the value specified.
+    ///
+    /// # Arguments
+    ///
+    /// * 'code' - A Code struct containing the address of the node to be
+    ///         added to the tree.
+    /// * 'value' - A usize value containing the value to be stored at the
+    ///         new node.
+    ///
+    /// # Examples
+    ///
+    /// '''
+    /// let tree = PrefixTree::new();
+    ///
+    /// let new_code = Code::from(0b011, 3);
+    ///
+    /// tree.insert_code(new_code, 255);
+    ///
+    /// let mut value = 0;
+    /// for bit in code {
+    ///     if let Some(v) = tree.walk(bit) {
+    ///         value = v;
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(value, 255);
+    /// '''
+    pub fn insert_code(&mut self, code: Code, value: usize) {
+        let mut current = Rc::clone(&self.root);
+        let mut current_code = Code::new();
+        for bit in code {
+            match bit {
+                0 => {
+                    if current.borrow().left.is_none() {
+                        current.borrow_mut().left = Some(Rc::new(RefCell::new(Node::new())));
+                    }
+                    let left = current.borrow().left.as_ref().unwrap().clone();
+                    current = left;
+                    current_code.push_bit(bit);
+                    current.borrow_mut().code = current_code;
+                }
+                1 => {
+                    if current.borrow().right.is_none() {
+                        current.borrow_mut().right = Some(Rc::new(RefCell::new(Node::new())));
+                    }
+                    let left = current.borrow().right.as_ref().unwrap().clone();
+                    current = left;
+                    current_code.push_bit(bit);
+                    current.borrow_mut().code = current_code;
+                }
+                _ => {}
+            }
+        }
+        current.borrow_mut().value = Some(value);
+        current.borrow_mut().code = code;
+        self.current = self.root.clone();
+    }
+    /// Generates a prefix code tree from the given bit lengths.
+    ///
+    /// # Arguments
+    ///
+    /// * 'code_lengths' An array of u8 values representing the number of
+    ///         bits in the code to represent a certain symbol, the symbol
+    ///         is the index of the value. So, bit_lengths[1] would equal
+    ///         the length of the code for 1.
+    ///
+    /// # Returns
+    ///
+    /// A new instance of PrefixTree built from the bit lengths provided.
+    pub fn from_lengths(code_lengths: &[u8]) -> Self {
+        // Define an array to hold the amount of times a code length appears.
+        // The index is the code length, and the value at the index is the
+        // number of occurances.
+        let mut occurances = [0u32; 256];
+
+        // Get the higest code length in the array.
+        let max_length = *code_lengths.iter().max().unwrap_or(&0) as usize;
+
+        // Iterates over code_lengths, taking occurances in as acc, and taking
+        // the current iterated value as idx. Then, acc is dereferenced to
+        // directly modify occurances, and it is indexed by idx (the code
+        // length) before being incremented while preventing overflow by
+        // saturating_add. acc is then returned, and the fold operation repeats
+        // until all members of code_lengths have been iterated over.
         code_lengths.iter().fold(&mut occurances, |acc, &idx| {
             (*acc)[idx as usize] = (*acc)[idx as usize].saturating_add(1);
             acc
         });
 
+        // Intialize next_code and code as zeroes.
         let mut next_code = vec![0; max_length + 1];
         let mut code = 0;
         occurances[0] = 0;
+
         for i in 1..=max_length {
             code = (code + occurances[i - 1]) << 1;
             next_code[i] = code;
@@ -224,15 +383,114 @@ impl PrefixCodeMap {
             }
         }
 
-        let mut map = BTreeMap::new();
+        let mut tree = PrefixTree::new();
 
         for (index, code) in codes.iter().enumerate() {
             if let Some(c) = code {
                 let code_struct = Code::from(c.to_owned(), code_lengths[index]);
-                map.insert(code_struct, index);
+                tree.insert_code(code_struct, index);
             }
         }
 
-        Self { map }
+        tree
+    }
+    /// Accepts a u8 representing a binary value and walks that direction on
+    /// the tree. Will panic if a non-binary value is given.
+    ///
+    /// # Arguments
+    ///
+    /// * 'direction' - A u8 containing which direction on the tree to step.
+    ///         Can be either 0 or 1.
+    ///
+    /// # Returns
+    ///
+    /// If the node is a branch and does not hold a value, None will be
+    /// returned, otherwise, the value at that leaf will be returned.
+    ///
+    /// # Examples
+    ///
+    /// '''
+    /// let mut tree = PrefixTree::new();
+    ///
+    /// tree.insert_code(Code::from(0b111, 3), 255);
+    ///
+    /// assert_eq!(tree.walk(1), None);
+    /// assert_eq!(tree.walk(1), None);
+    /// assert_eq!(tree.walk(1), Some(255));
+    /// '''
+    pub fn walk(&mut self, direction: u8) -> Option<usize> {
+        assert!(direction < 2);
+
+        match direction {
+            0 => {
+                let tmp = self.current.clone();
+                let tmp_borrow = tmp.borrow();
+                if let Some(left) = tmp_borrow.left.clone() {
+                    self.current = left.clone();
+                    if let Some(value) = self.current.clone().borrow().value {
+                        self.current = self.root.clone();
+                        return Some(value);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+            1 => {
+                let tmp = self.current.clone();
+                let tmp_borrow = tmp.borrow();
+                if let Some(right) = tmp_borrow.right.clone() {
+                    self.current = right.clone();
+                    if let Some(value) = self.current.clone().borrow().value {
+                        self.current = self.root.clone();
+                        return Some(value);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
     }
 }
+
+impl Default for PrefixTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for PrefixTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn format_node(
+            node: &Option<Rc<RefCell<Node>>>,
+            prefix: String,
+            is_right: bool,
+            f: &mut fmt::Formatter<'_>,
+        ) -> fmt::Result {
+            if let Some(node) = node {
+                writeln!(
+                    f,
+                    "{}{}({}{})",
+                    prefix,
+                    if is_right { "├── " } else { "└── " },
+                    node.borrow().code,
+                    if let Some(value) = node.borrow().value {
+                        format!(": {}", value)
+                    } else {
+                        String::new()
+                    }
+                )?;
+                let new_prefix = format!("{}{}", prefix, if is_right { "│   " } else { "    " });
+                format_node(&node.borrow().right, new_prefix.clone(), true, f)?;
+                format_node(&node.borrow().left, new_prefix, false, f)?;
+            }
+            Ok(())
+        }
+
+        writeln!(f, "{}", self.root.borrow())?;
+        format_node(&self.root.borrow().right, String::new(), true, f)?;
+        format_node(&self.root.borrow().left, String::new(), false, f)
+    }
+}
+

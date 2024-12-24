@@ -1,10 +1,12 @@
-use crate::compression::prefix::{
-    Code, PrefixCodeMap, DISTANCE_BASE, DISTANCE_EXTRA_BITS, FIXED_CODE_LENGTHS, LENGTH_BASE,
-    LENGTH_EXTRA_BITS,
-};
-
-use super::bits::BitVector64;
 use std::{error::Error, fmt::Display};
+
+use crate::{
+    compression::bits::BitVector64,
+    compression::prefix::{
+        PrefixTree, DISTANCE_BASE, DISTANCE_EXTRA_BITS, FIXED_CODE_LENGTHS, LENGTH_BASE,
+        LENGTH_EXTRA_BITS,
+    },
+};
 
 #[derive(Debug)]
 pub enum DeflateError {
@@ -20,7 +22,7 @@ impl Display for DeflateError {
                 write!(f, "InvalidBlock Error: {}", s)
             }
             DeflateError::InvalidSymbolError(v, r) => {
-                write!(f, "InvalidSymbolError caused by symbol: {}, {}", v, r)
+                write!(f, "InvalidSymbolError cause by symbol: {}, {}", v, r)
             }
             DeflateError::DecompressionError(s) => {
                 write!(f, "DecompressionError: {}", s)
@@ -33,44 +35,59 @@ impl Error for DeflateError {}
 
 #[derive(Debug)]
 pub struct DeflateStream {
-    pub compressed: Vec<u8>,
-    pub decompressed: Vec<u8>,
+    compressed: Vec<u8>,
+    decompressed: Vec<u8>,
     pub bitstream: BitVector64,
-    pub finished: bool,
+    finished: bool,
 }
 
 impl DeflateStream {
-    pub fn build(bytes: &[u8]) -> Self {
-        let compressed = bytes.to_vec();
-        let bitstream = BitVector64::from_be_bytes(bytes);
-        let decompressed = Vec::with_capacity(compressed.len());
-        let finished = false;
-
+    pub fn build(compressed: &[u8]) -> Self {
+        let bitstream = BitVector64::from_be_bytes(compressed);
         Self {
-            compressed,
-            decompressed,
+            compressed: compressed.to_vec(),
+            decompressed: Vec::new(),
             bitstream,
-            finished,
+            finished: false,
         }
     }
     pub fn decompress(&mut self) -> Result<Vec<u8>, DeflateError> {
         while !self.finished {
-            let header = self.bitstream.by_ref().take(3).collect::<Vec<_>>();
+            // Initialize header.
+            let mut header: [u8; 3] = [0; 3];
 
+            // Iterate through header, popping the first 3 items from the
+            // bitstream and adding them to header.
+            for header_bit in header.iter_mut() {
+                if let Some(b) = self.bitstream.next() {
+                    *header_bit = b;
+                } else {
+                    return Err(DeflateError::InvalidBlockError(
+                        "Block ran out of bits before a header was specified.",
+                    ));
+                }
+            }
+
+            println!("{:?}", header);
             self.finished = matches!(header[0], 1);
 
+            // Main decompression loop.
             match (header[1], header[2]) {
-                (0, 0) => self.store()?,
-                (1, 0) => self.fixed()?,
-                (0, 1) => self.dynamic()?,
-                _ => return Err(DeflateError::InvalidBlockError("Invalid block type.")),
-            };
+                (0, 0) => {
+                    self.block_type_0()?;
+                }
+                (1, 0) => {
+                    self.block_type_1()?;
+                }
+                (0, 1) => {
+                    self.block_type_2()?;
+                }
+                _ => return Err(DeflateError::InvalidBlockError("Invalid BTYPE.")),
+            }
         }
-
         Ok(self.decompressed.clone())
     }
-    fn store(&mut self) -> Result<(), DeflateError> {
-        println!("store");
+    fn block_type_0(&mut self) -> Result<(), DeflateError> {
         let len = self
             .bitstream
             .by_ref()
@@ -89,7 +106,7 @@ impl DeflateStream {
 
         if len != !nlen {
             return Err(DeflateError::InvalidBlockError(
-                "Block type is 0, but NLEN is not the bitwise complement to LEN.",
+                "BTYPE is 0, but NLEN is not the bitwise complement to LEN.",
             ));
         }
 
@@ -102,28 +119,26 @@ impl DeflateStream {
 
         Ok(())
     }
-    fn fixed(&mut self) -> Result<(), DeflateError> {
-        println!("fixed");
+    fn block_type_1(&mut self) -> Result<(), DeflateError> {
+        let mut prefix_tree = PrefixTree::from_lengths(&FIXED_CODE_LENGTHS);
 
-        let code_map = PrefixCodeMap::from_lengths(&FIXED_CODE_LENGTHS);
-        let mut code_buf = Code::new();
-
-        let mut output = Vec::new();
+        //let mut output = Vec::new();
 
         // Iterate through the bitstream.
         while let Some(bit) = self.bitstream.by_ref().next() {
-            code_buf.push_bit(bit);
-            // Check the code map for the code.
-            if let Some(value) = code_map.map.get(&code_buf) {
-                code_buf = Code::new();
-                // Push literals to the output.
-                if *value < 256 {
-                    output.push(value);
+            // Walk the tree and if there is a value, take it and continue.
+            if let Some(value) = prefix_tree.walk(bit) {
+                // If the value less than 256, it is a literal and should be
+                // pushed unaltered to the output stream.
+                if value < 256 {
+                    self.decompressed.push(value as u8);
+                // If it is in the range from 257..285 it is a length code.
                 } else if let 257..=285 = value {
+                    // Get the base and number of extra bits.
                     let mut length = LENGTH_BASE[value - 257];
                     let len_extra = LENGTH_EXTRA_BITS[value - 257];
-
-                    // Get the extra length bits.
+                    // If length has extra bits, iterate through them, and add
+                    // the value to the base length.
                     if len_extra > 0 {
                         let additional_length = self
                             .bitstream
@@ -135,8 +150,8 @@ impl DeflateStream {
                         length += additional_length;
                     }
 
-                    // Get the 5 bit distance code.
-                    let mut distance = self
+                    // After every length code is a 5 bit distance code.
+                    let mut distance: usize = self
                         .bitstream
                         .by_ref()
                         .take(5)
@@ -158,26 +173,21 @@ impl DeflateStream {
                         distance = dist_base as usize;
                     }
 
-                    let start_idx = output.len() - distance;
+                    let start_idx = self.decompressed.len() - distance;
                     let end_idx = start_idx + length as usize;
 
                     for idx in start_idx..end_idx {
-                        output.push(output[idx]);
+                        self.decompressed.push(self.decompressed[idx]);
                     }
-                } else if *value == 256 {
+                } else if value == 256 {
                     break;
                 }
             }
         }
-        output
-            .iter()
-            .map(|x| **x as u8)
-            .for_each(|byte| self.decompressed.push(byte));
 
         Ok(())
     }
-    fn dynamic(&mut self) -> Result<(), DeflateError> {
-        println!("dynamic");
+    fn block_type_2(&mut self) -> Result<(), DeflateError> {
         // # of literal/length codes - 257 (257..286)
         let hlit = self
             .bitstream
@@ -213,53 +223,30 @@ impl DeflateStream {
             .collect::<Vec<_>>();
 
         //
-        let mut cl_lengths = [0; 19];
         let mut cl_lengths_sorted = [0; 19];
+
+        const LENGTH_ORDER: [usize; 19] = [
+            16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+        ];
 
         // Put code lengths into cl_lengths in the order:
         // 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
         for (i, len) in cl_len_vec.chunks(3).enumerate() {
             let value = len.iter().rev().fold(0u8, |acc, bit| (acc << 1) | *bit);
 
-            cl_lengths[i] = value;
-        }
-        for (i, len) in cl_lengths_sorted.iter_mut().enumerate() {
-            *len = match i {
-                16 => cl_lengths[0],
-                17 => cl_lengths[1],
-                18 => cl_lengths[2],
-                0 => cl_lengths[3],
-                8 => cl_lengths[4],
-                7 => cl_lengths[5],
-                9 => cl_lengths[6],
-                6 => cl_lengths[7],
-                10 => cl_lengths[8],
-                5 => cl_lengths[9],
-                11 => cl_lengths[10],
-                4 => cl_lengths[11],
-                12 => cl_lengths[12],
-                3 => cl_lengths[13],
-                13 => cl_lengths[14],
-                2 => cl_lengths[15],
-                14 => cl_lengths[16],
-                1 => cl_lengths[17],
-                15 => cl_lengths[18],
-                _ => 0,
-            }
+            cl_lengths_sorted[LENGTH_ORDER[i]] = value;
         }
 
-        let code_length_map = PrefixCodeMap::from_lengths(&cl_lengths_sorted);
+        // Generate the code length prefix tree.
+        let mut code_length_tree = PrefixTree::from_lengths(&cl_lengths_sorted);
 
-        let mut code_lengths = Vec::new();
-        let mut code_buf = Code::new();
+        let mut code_lengths: Vec<u8> = Vec::new();
 
         while code_lengths.len() < (hlit as usize + 257 + hdist as usize + 1) {
             if let Some(bit) = self.bitstream.by_ref().next() {
-                code_buf.push_bit(bit);
-                if let Some(symbol) = code_length_map.map.get(&code_buf) {
-                    code_buf = Code::new();
+                if let Some(symbol) = code_length_tree.walk(bit) {
                     match symbol {
-                        0..16 => code_lengths.push(*symbol as u8),
+                        0..16 => code_lengths.push(symbol as u8),
                         16..=18 => {
                             let (number_of_extra, base) = match symbol {
                                 16 => (2, 3usize),
@@ -275,7 +262,7 @@ impl DeflateStream {
                                 >> (8 - number_of_extra))
                                 as usize;
 
-                            if *symbol == 16 {
+                            if symbol == 16 {
                                 for _ in 0..(base + _extra_bits) {
                                     code_lengths.push(*code_lengths.last().unwrap());
                                 }
@@ -289,21 +276,22 @@ impl DeflateStream {
             }
         }
 
-        let ll = PrefixCodeMap::from_lengths(&code_lengths[0..(hlit as usize + 257)]);
-        let dist = PrefixCodeMap::from_lengths(&code_lengths[(hlit as usize + 257)..]);
+        let mut ll_tree = PrefixTree::from_lengths(&code_lengths[0..(hlit as usize + 257)]);
+        let mut dist_tree = PrefixTree::from_lengths(&code_lengths[(hlit as usize + 257)..]);
 
-        let mut output = Vec::new();
+        println!("{}", ll_tree);
 
-        let mut ll_buf = Code::new();
+        // Testing pushing data straight to the decompressed stream.
+        //let mut output: Vec<usize> = Vec::new();
+
+        // Nearly identical logic to block type 1.
         while let Some(bit) = self.bitstream.by_ref().next() {
-            ll_buf.push_bit(bit);
-            if let Some(symbol) = ll.map.get(&ll_buf) {
-                ll_buf = Code::new();
-                if *symbol < 256 {
-                    output.push(*symbol);
-                } else if let 257..285 = symbol {
-                    let mut length = LENGTH_BASE[symbol - 257];
-                    let len_extra = LENGTH_EXTRA_BITS[symbol - 257];
+            if let Some(sym) = ll_tree.walk(bit) {
+                if sym < 256 {
+                    self.decompressed.push(sym as u8);
+                } else if let 257..285 = sym {
+                    let mut length = LENGTH_BASE[sym - 257];
+                    let len_extra = LENGTH_EXTRA_BITS[sym - 257];
 
                     if len_extra > 0 {
                         let additional_length = self
@@ -316,20 +304,19 @@ impl DeflateStream {
                         length += additional_length;
                     }
 
-                    let mut _distance = 0usize;
-
-                    let mut dist_buf = Code::new();
+                    // Distance codes are encoded.
+                    let mut distance: usize;
                     loop {
                         if let Some(bit) = self.bitstream.by_ref().next() {
-                            dist_buf.push_bit(bit);
-                            if let Some(dist) = dist.map.get(&dist_buf) {
-                                _distance = *dist;
+                            if let Some(dist) = dist_tree.walk(bit) {
+                                distance = dist;
                                 break;
                             }
                         }
                     }
-                    let dist_extra = DISTANCE_EXTRA_BITS[_distance];
-                    let dist_base = DISTANCE_BASE[_distance];
+
+                    let dist_extra = DISTANCE_EXTRA_BITS[distance];
+                    let dist_base = DISTANCE_BASE[distance];
 
                     if dist_extra > 0 {
                         let additional_distance = self
@@ -339,27 +326,23 @@ impl DeflateStream {
                             .fold(0u16, |acc, bit| (acc << 1) | bit as u16)
                             .reverse_bits()
                             >> (16 - dist_extra);
-                        _distance = (dist_base + additional_distance) as usize;
+                        distance = (dist_base + additional_distance) as usize;
                     } else {
-                        _distance = dist_base as usize;
+                        distance = dist_base as usize;
                     }
 
-                    let start_idx = output.len() - _distance;
+                    let start_idx = self.decompressed.len() - distance;
                     let end_idx = start_idx + length as usize;
 
                     for idx in start_idx..end_idx {
-                        output.push(output[idx]);
+                        self.decompressed.push(self.decompressed[idx]);
                     }
-                } else if *symbol == 256 {
+                } else if sym == 256 {
                     break;
                 }
             }
         }
 
-        output
-            .iter()
-            .map(|x| *x as u8)
-            .for_each(|byte| self.decompressed.push(byte));
         Ok(())
     }
 }
