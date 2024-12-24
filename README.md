@@ -4,6 +4,10 @@ A no-dependency Rust image manipulation utility (eventually).
 
 ## Goals
 
+Currently, the PNG decoder works, however only on small images and the
+breaking point needs to be found. Some problems seem to come from the zlib
+decompresser.
+
 - [ ] CLI
   - [x] Get file input path and output path.
   - [ ] Write usage and help blurb.
