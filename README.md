@@ -2,11 +2,17 @@
 
 A no-dependency Rust image manipulation utility (eventually).
 
-## Goals
+## Status
 
-Currently, the PNG decoder works, however only on small images and the
-breaking point needs to be found. Some problems seem to come from the zlib
-decompresser.
+The chunk parsing, decompression, and filtering all work well. Right now, the
+PNG decoder can successfully convert simple pictures using the RGB color type.
+The next steps are to tackle interlacing, the other color types, and then add
+support for as many optional ancillary chunks as possible (and worth doing).
+
+Thanks to PngSuite by Willem van Schaik, I now have a good way to test and fix
+all of the many edge cases the PNG format provides.
+
+## Goals
 
 - [ ] CLI
   - [x] Get file input path and output path.
@@ -33,4 +39,27 @@ decompresser.
     - [x] Up.
     - [x] Average.
     - [x] Paeth.
-  - [ ] Learn more.
+  - [ ] Color types.
+    - [ ] Grayscale.
+    - [x] RGB.
+    - [ ] Palette index.
+    - [ ] Grayscale + alpha.
+    - [ ] RGB + alpha.
+  - [ ] Interlacing.
+    - [x] None.
+    - [ ] Adam7.
+  - [ ] Ancillary chunks.
+    - [ ] tRNS
+    - [ ] gAMA
+    - [ ] cHRM
+    - [ ] sRGB
+    - [ ] iCCP
+    - [ ] tEXt
+    - [ ] zTXt
+    - [ ] iTXt
+    - [ ] bKGD
+    - [ ] pHYs
+    - [ ] sBIT
+    - [ ] sPLT
+    - [ ] hIST
+    - [ ] tIME

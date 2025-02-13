@@ -1,5 +1,7 @@
 use std::{error::Error, fmt::Display};
 
+use crate::compression::adler::adler32;
+
 use super::{
     bits::BitVector64,
     inflate::{DeflateError, DeflateStream},
@@ -113,6 +115,11 @@ impl ZlibStream {
     }
     #[inline]
     pub fn decompress(&mut self) -> Result<Vec<u8>, DeflateError> {
-        self.deflate.decompress()
+        let data = self.deflate.decompress()?;
+        let adler32 = adler32(&data);
+
+        assert!(adler32 == self.adler32);
+
+        Ok(data)
     }
 }

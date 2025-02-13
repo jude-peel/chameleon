@@ -68,7 +68,6 @@ impl DeflateStream {
                 }
             }
 
-            println!("{:?}", header);
             self.finished = matches!(header[0], 1);
 
             // Main decompression loop.
@@ -279,11 +278,6 @@ impl DeflateStream {
         let mut ll_tree = PrefixTree::from_lengths(&code_lengths[0..(hlit as usize + 257)]);
         let mut dist_tree = PrefixTree::from_lengths(&code_lengths[(hlit as usize + 257)..]);
 
-        println!("{}", ll_tree);
-
-        // Testing pushing data straight to the decompressed stream.
-        //let mut output: Vec<usize> = Vec::new();
-
         // Nearly identical logic to block type 1.
         while let Some(bit) = self.bitstream.by_ref().next() {
             if let Some(sym) = ll_tree.walk(bit) {
@@ -331,7 +325,7 @@ impl DeflateStream {
                         distance = dist_base as usize;
                     }
 
-                    let start_idx = self.decompressed.len() - distance;
+                    let start_idx = self.decompressed.len().saturating_sub(distance);
                     let end_idx = start_idx + length as usize;
 
                     for idx in start_idx..end_idx {
