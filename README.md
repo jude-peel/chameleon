@@ -47,7 +47,7 @@ all of the many edge cases the PNG format provides.
     - [ ] RGB + alpha.
   - [ ] Interlacing.
     - [x] None.
-    - [ ] Adam7.
+    - [ ] Adam7 (AAAAAAAAAAA).
   - [ ] Ancillary chunks.
     - [ ] tRNS
     - [ ] gAMA

@@ -15,12 +15,18 @@ pub fn png_suite() {
             Err(e) => {
                 eprintln!("{}", e);
                 eprintln!("Failed to generate PNG struct from {:?}", file.file_name());
-                std::process::exit(1);
+                continue;
             }
         };
 
         println!("Converting {:?} to RGB", file.file_name());
-        let rgb = png.rgb();
+        let rgb = match png.rgb() {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("FAILED TO CONVERT TO RGB");
+                continue;
+            }
+        };
 
         println!("Converting to PPM");
         let ppm = Ppm::build(&rgb, png.dimensions.0, png.dimensions.1);
@@ -30,7 +36,7 @@ pub fn png_suite() {
             Ok(_) => {}
             Err(_) => {
                 eprintln!("Failed to write PPM to output.");
-                std::process::exit(1);
+                continue;
             }
         }
     }

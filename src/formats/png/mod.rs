@@ -142,7 +142,7 @@ impl Png {
     ///
     /// A Vec<(u8, u8, u8)> containing each pixel from left to right, top to
     /// bottom.
-    pub fn rgb(&self) -> Vec<(u8, u8, u8)> {
+    pub fn rgb(&self) -> Result<Vec<(u8, u8, u8)>, DecoderError> {
         // Concatenate the data from all IDAT chunks.
         let zlib_bytes = self
             .data
@@ -215,11 +215,14 @@ impl Png {
         println!("{:?}", self.color_type);
         for line in defiltered_scanlines {
             for values in line.chunks(3) {
+                if values.len() != 3 {
+                    return Err(DecoderError::Unexplainable);
+                }
                 output.push((values[0], values[1], values[2]));
             }
         }
 
-        output
+        Ok(output)
     }
 }
 
@@ -491,6 +494,7 @@ pub enum DecoderError {
     InvalidChunk(&'static str),
     InvalidColorType(u8),
     InvalidInterlace(u8),
+    Unexplainable,
 }
 
 // Defines how DecoderErrors are displayed.
@@ -515,6 +519,9 @@ impl Display for DecoderError {
             }
             DecoderError::InvalidInterlace(i) => {
                 write!(f, "Error: Invalid interlace value {}, only 0 (none) or 1 (Adam7 interlace) are currently valid.", i)
+            }
+            DecoderError::Unexplainable => {
+                write!(f, "Error: Something unexpected happened :(")
             }
         }
     }
